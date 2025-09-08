@@ -1,0 +1,144 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>WindBorne Vendor Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+    header { margin-bottom: 16px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 16px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #f6f6f6; }
+    .flag-low { background: #fff3cd; } /* yellow-ish */
+    .flag-ok  { background: #d1e7dd; } /* green-ish */
+    .controls { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    .chip { padding:6px 10px; border:1px solid #ccc; border-radius: 999px; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Vendor Dashboard (Alpha Vantage Fundamentals)</h1>
+    <p>Compare potential sensor/plastics vendors using company overview and income statements.</p>
+  </header>
+
+  <section class="controls">
+    <label><input type="checkbox" class="vendor" value="TEL" checked> TE Connectivity (TEL)</label>
+    <label><input type="checkbox" class="vendor" value="ST"  checked> Sensata (ST)</label>
+    <label><input type="checkbox" class="vendor" value="DD"  checked> DuPont (DD)</label>
+    <label><input type="checkbox" class="vendor" value="CE"  checked> Celanese (CE)</label>
+    <label><input type="checkbox" class="vendor" value="LYB" checked> LyondellBasell (LYB)</label>
+
+    <button id="btnCompare" class="chip">Compare</button>
+    <button id="btnCsv" class="chip">Export CSV</button>
+  </section>
+
+  <canvas id="revChart" height="120" style="margin-top:18px;"></canvas>
+
+  <table id="tbl" style="display:none;">
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Name</th><th>Industry</th>
+        <th>Fiscal Year</th><th>Revenue</th><th>Net Income</th><th>Flag</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    const tbl = document.getElementById('tbl');
+    const tbody = tbl.querySelector('tbody');
+    const btnCompare = document.getElementById('btnCompare');
+    const btnCsv = document.getElementById('btnCsv');
+    let chart;
+
+    function fmt(x) {
+      if (x == null) return '';
+      return Number(x).toLocaleString('en-US', {maximumFractionDigits:0});
+    }
+    function flagClass(f) {
+      if (f === 'LOW') return 'flag-low';
+      if (f === 'OK')  return 'flag-ok';
+      return '';
+    }
+    function getVendors() {
+      return [...document.querySelectorAll('.vendor:checked')].map(el => el.value);
+    }
+    function toCsv(rows) {
+      const header = ['Symbol','Name','Industry','FiscalYear','Revenue','NetIncome','Flag'];
+      const lines = [header.join(',')];
+      for (const r of rows) {
+        const line = [
+          r.symbol, `"${(r.name||'').replace(/"/g,'""')}"`,
+          `"${(r.industry||'').replace(/"/g,'""')}"`,
+          r.fiscalYear || '', r.revenue || '', r.netIncome || '', r.revenueFlag || ''
+        ].join(',');
+        lines.push(line);
+      }
+      return lines.join('\n');
+    }
+    function download(filename, content, type='text/csv') {
+      const blob = new Blob([content], {type});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function compare() {
+      const v = getVendors();
+      if (!v.length) return;
+      const qs = v.map(x => 'v=' + encodeURIComponent(x)).join('&');
+      const res = await fetch('/api/compare?' + qs);
+      const rows = await res.json();
+
+      // Table
+      tbody.innerHTML = '';
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        tr.className = flagClass(r.revenueFlag);
+        tr.innerHTML = `
+          <td>${r.symbol||''}</td>
+          <td>${r.name||''}</td>
+          <td>${r.industry||''}</td>
+          <td>${r.fiscalYear||''}</td>
+          <td>${fmt(r.revenue)}</td>
+          <td>${fmt(r.netIncome)}</td>
+          <td>${r.revenueFlag||''}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+      tbl.style.display = '';
+
+      // Chart
+      const labels = rows.map(r => r.symbol);
+      const revs = rows.map(r => r.revenue || 0);
+      if (chart) chart.destroy();
+      const ctx = document.getElementById('revChart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: { labels, datasets: [{ label: 'Revenue (latest annual, USD)', data: revs }] },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: true } },
+          scales: { y: { ticks: { callback: (v)=> Intl.NumberFormat('en-US', {notation:'compact'}).format(v) } } }
+        }
+      });
+
+      // Keep data in window for CSV export
+      window.__compareRows = rows;
+    }
+
+    btnCompare.addEventListener('click', compare);
+    btnCsv.addEventListener('click', () => {
+      const rows = window.__compareRows || [];
+      if (!rows.length) return;
+      download('vendor_comparison.csv', toCsv(rows));
+    });
+
+    // Auto-run once on load
+    compare();
+  </script>
+</body>
+</html>
